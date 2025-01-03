@@ -1,0 +1,415 @@
+---
+title: "NBA longitudinal efficiency analysis"
+author: "Will Tackett, Jacob Vidergar"
+date: "2024-12-15"
+output: pdf_document
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(performance)
+library(RColorBrewer)
+library(sjPlot)
+library(table1)
+```
+
+## Exploratory Data Analysis
+```{r}
+data <- read.csv("all_seasons.csv")
+data <- data %>% select(-X)
+head(data)
+```
+
+```{r}
+summary(data)
+str(data)
+```
+
+### Filter data
+```{r, warning=FALSE}
+filtered_data <- data %>%
+  # Add a column for games played in the season
+  mutate(gp_season = case_when(
+    season == "1998-99" ~ 50,
+    season == "2011-12" ~ 66,
+    TRUE ~ 82
+  )) %>%
+  # adjust naming of draft round categories
+  mutate(draft_round_combined = case_when(
+    draft_round == 0 ~ "Undrafted", 
+    draft_round == "Undrafted" ~ "Undrafted", 
+    draft_round %in% c(1, 2) ~ as.character(draft_round),
+    TRUE ~ NA_character_
+  )) %>%
+  # Filter for relevant draft round categories
+  filter(draft_round_combined %in% c("Undrafted", "1", "2")) %>%
+  # Calculate the percentage of games played
+  mutate(gp_pct = gp / gp_season) %>%
+  # Filter for players who played at least 50% of games
+  filter(gp_pct > 0.5)
+
+# make season continuous
+filtered_data <- filtered_data %>%
+  mutate(season_continuous = as.numeric(substr(season, 1, 4)))
+
+# Create a new column combining 2 and Undrafted into one category
+filtered_data <- filtered_data %>%
+  mutate(draft_round_combined_new = ifelse(draft_round_combined %in% c("2", "Undrafted"), 
+                                           "2_or_Undrafted", 
+                                           draft_round_combined))
+```
+
+```{r}
+# convert important variables from chr to factor
+filtered_data$draft_round_combined <- as.factor(filtered_data$draft_round_combined)
+# filtered_data$season <- as.factor(filtered_data$season)
+filtered_data$player_name <- as.factor(filtered_data$player_name)
+```
+
+```{r}
+# set min threshold for games played (50%)
+print("before threshold")
+# Count the number of observations for each level
+table(filtered_data$draft_round_combined)
+
+print("after threshold")
+# Keep observations where gp / gp_season >= 0.5
+filtered_data <- filtered_data %>%
+  filter(gp / gp_season >= 0.5)
+
+# Count the number of observations for each level
+table(filtered_data$draft_round_combined)
+```
+
+```{r}
+# Prepare the data for Table 1
+table_data <- filtered_data %>%
+  select(draft_round_combined, ts_pct, player_height, player_weight, age, gp_pct) %>%
+  mutate(draft_round_combined = factor(
+    draft_round_combined,
+    levels = c("1", "2", "Undrafted"),
+    labels = c("1st Round", "2nd Round", "Undrafted")
+  ))
+
+# Apply variable labels using label()
+label(table_data$draft_round_combined) <- "Draft Round"
+label(table_data$ts_pct) <- "True Shooting Percentage"
+label(table_data$player_height) <- "Height (inches)"
+label(table_data$player_weight) <- "Weight (lbs)"
+label(table_data$age) <- "Age"
+label(table_data$gp_pct) <- "Games Played (%)"
+
+# Create the Table 1
+table1(
+  ~ ts_pct + player_height + player_weight + age + gp_pct | draft_round_combined,
+  data = table_data,
+  overall = "Overall",
+  render = function(x, name, ...) {
+    if (is.numeric(x)) {
+      # Customize numeric summaries: Mean (SD)
+      sprintf("%0.2f (%0.2f)", mean(x, na.rm = TRUE), sd(x, na.rm = TRUE))
+    } else {
+      # Show counts for categorical variables
+      table1::render.default(x, name, ...)
+    }
+  }
+)
+
+``` 
+
+### Preliminary Plots
+```{r}
+# Average `ts_pct` by the new combined draft_round category and season
+draft_round_ts_pct_combined <- filtered_data %>%
+    group_by(draft_round_combined, season) %>%
+    summarize(avg_ts_pct = mean(ts_pct, na.rm = TRUE))
+
+# Ensure `season` is treated as a factor with the correct order
+draft_round_ts_pct_combined$season <- factor(draft_round_ts_pct_combined$season, levels = sort(unique(draft_round_ts_pct_combined$season)))
+```
+
+
+```{r}
+ggplot(filtered_data, aes(x = season, y = ts_pct, color = draft_round_combined_new, group = draft_round_combined_new)) +
+  stat_summary(fun = mean, geom = "line", size = 1) + # Line plot for mean TS% by season
+  stat_summary(fun = mean, geom = "point", size = 2) + # Points for clarity
+  labs(
+    title = "Interaction Effect of Draft Round and Season on TS%",
+    x = "Season",
+    y = "True Shooting Percentage",
+    color = "Draft Round"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis labels
+```
+
+```{r}
+ggplot(filtered_data, aes(x = draft_round_combined_new, y = ts_pct, fill = draft_round_combined_new)) +
+  geom_boxplot() +
+  labs(
+    title = "Distribution of True Shooting Percentage by Draft Round",
+    x = "Draft Round",
+    y = "True Shooting Percentage"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r}
+ggplot(filtered_data, aes(x = player_height, y = player_weight, color = ts_pct)) +
+  geom_point(alpha = 1, size = 3) +
+  scale_color_viridis_c(
+    name = "TS%", 
+    option = "plasma",        # Use a vibrant "plasma" color scheme
+    limits = c(0.45, 0.7),    # Adjust the range for TS%
+    breaks = seq(0.45, 0.7, by = 0.05)  # Add meaningful breaks
+  ) +
+  labs(
+    title = "Height, Weight, and True Shooting Percentage",
+    x = "Player Height (inches)",
+    y = "Player Weight (lbs)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+```
+
+
+## Modeling
+```{r}
+# linear_model <- lm(ts_pct ~ draft_round_combined, data = filtered_data)
+# summary(linear_model)
+
+# Fit a mixed effects model where:
+# - `season` is modeled as a fixed effect to assess the change in `ts_pct` over time.
+# - `draft_round_combined_new` is modeled as a fixed effect to adjust for round differences.
+# - A random intercept for `player_id` to account for player-specific variability.
+
+model <- lmer(ts_pct ~ season * draft_round_combined + player_height + player_weight + age + (1 | player_name), 
+              data = filtered_data)
+
+# View the model summary
+summary(model)
+```
+
+Try season as continuous variable
+```{r}
+filtered_data <- filtered_data %>%
+  mutate(season_continuous = as.numeric(substr(season, 1, 4)))
+
+model <- lmer(ts_pct ~ season_continuous * draft_round_combined + player_height + player_weight + age + (1 | player_name), data = filtered_data)
+
+# View the model summary
+summary(model)
+```
+
+Histogram for age
+```{r}
+# Basic histogram
+hist(filtered_data$age,
+     breaks = 10, # Number of bins
+     col = "skyblue", # Bar color
+     border = "black", # Border color
+     main = "Age Distribution", # Title
+     xlab = "Age", # X-axis label
+     ylab = "Frequency", # Y-axis label
+     ylim = c(0, 2000)) # Adjust Y-axis limits for better view
+
+# Add a grid for better readability (optional)
+grid()
+
+```
+
+Recode age based on histogram
+```{r}
+# Create a new categorical variable based on age
+filtered_data$career_stage <- cut(filtered_data$age,
+                                  breaks = c(-Inf, 25, 30, Inf), # Define age ranges
+                                  labels = c("Rookie", "Mid-Career", "Veteran"), # Labels
+                                  right = TRUE) # Include the upper boundary in each interval
+
+# Check the distribution of the new variable
+table(filtered_data$career_stage)
+
+```
+
+New model with career_stage instead of age
+```{r}
+model <- lmer(ts_pct ~ season_continuous * draft_round_combined + player_height + player_weight + career_stage + (1 | player_name), data = filtered_data)
+
+# View the model summary
+summary(model)
+```
+
+Residual Diagnostics
+```{r}
+# Extract residuals
+residuals <- residuals(model)
+
+# Plot residuals vs. fitted values
+plot(fitted(model), residuals,
+     main = "Residuals vs. Fitted",
+     xlab = "Fitted Values",
+     ylab = "Residuals")
+abline(h = 0, col = "red", lwd = 2)
+
+# Check normality of residuals
+qqnorm(residuals, main = "Q-Q Plot of Residuals")
+qqline(residuals, col = "red", lwd = 2)
+
+# Histogram of residuals
+hist(residuals, breaks = 30, main = "Histogram of Residuals",
+     xlab = "Residuals", col = "lightblue", border = "black")
+
+```
+
+Random Effects Diagnostics
+```{r}
+# Extract random effects
+ranef_data <- as.data.frame(ranef(model)$player_name)
+
+# Plot random effects
+ggplot(ranef_data, aes(x = `(Intercept)`)) +
+  geom_histogram(bins = 30, fill = "lightblue", color = "black") +
+  labs(title = "Random Effects (Player Intercept)", x = "Random Intercept", y = "Frequency") +
+  theme_minimal()
+
+```
+
+Multicollinearity Check
+```{r}
+# Using performance package
+# Check collinearity for your mixed-effects model
+check_collinearity(model)
+```
+
+Potential Logit Transform
+```{r}
+filtered_data$ts_pct_logit <- log(filtered_data$ts_pct / (1 - filtered_data$ts_pct))
+model_logit <- lmer(ts_pct_logit ~ season_continuous * draft_round_combined +
+                      player_height + player_weight + career_stage + (1 | player_name), data = filtered_data)
+
+summary(model_logit)
+```
+
+
+Compare models
+```{r}
+AIC(model, model_logit)
+```
+
+Non linear effects of height and weight?
+```{r}
+# Quadtratic terms
+model_poly <- lmer(ts_pct ~ season_continuous * draft_round_combined + 
+                     poly(player_height, 2) + poly(player_weight, 2) + 
+                     career_stage + (1 | player_name), data = filtered_data)
+summary(model_poly)
+
+# Spline model
+library(splines)
+model_spline <- lmer(ts_pct ~ season_continuous * draft_round_combined + 
+                       ns(player_height, df = 3) + ns(player_weight, df = 3) + 
+                       career_stage + (1 | player_name), data = filtered_data)
+summary(model_spline)
+
+```
+
+Compare models
+```{r}
+anova(model, model_poly, model_spline)
+AIC(model, model_poly, model_spline)
+```
+
+```{r}
+library(sjPlot)
+plot_model(model_poly, type = "pred", terms = "player_height [all]")
+plot_model(model_poly, type = "pred", terms = "player_weight [all]")
+
+# Group by player_height and calculate the mean ts_pct
+avg_ts_by_height <- filtered_data %>%
+  group_by(player_height) %>%
+  summarize(avg_ts_pct = mean(ts_pct, na.rm = TRUE))
+
+# View the summarized data
+head(avg_ts_by_height)
+
+ggplot(avg_ts_by_height, aes(x = player_height, y = avg_ts_pct)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "darkblue") +
+  labs(
+    title = "Average TS% by Player Height",
+    x = "Player Height",
+    y = "Average TS%"
+  ) +
+  theme_minimal()
+
+# Group by player_weight and calculate the mean ts_pct
+avg_ts_by_weight <- filtered_data %>%
+  group_by(player_weight) %>%
+  summarize(avg_ts_pct = mean(ts_pct, na.rm = TRUE))
+
+# View the summarized data
+head(avg_ts_by_weight)
+
+ggplot(avg_ts_by_weight, aes(x = player_weight, y = avg_ts_pct)) +
+  geom_line(color = "red", size = 1) +
+  geom_point(color = "darkred") +
+  labs(
+    title = "Average TS% by Player Weight",
+    x = "Player Weight",
+    y = "Average TS%"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+LeBron James sub-analysis
+```{r}
+# Filter the data for LeBron James
+leData <- subset(filtered_data, player_name == "LeBron James")
+
+# Plot ts_pct over season_continuous for LeBron James
+plot(leData$season_continuous, leData$ts_pct,
+     type = "o", # Line plot with points
+     col = "blue", # Line color
+     pch = 16, # Point style
+     lwd = 2, # Line width
+     xlab = "Season (Continuous)", # X-axis label
+     ylab = "True Shooting Percentage (ts_pct)", # Y-axis label
+     main = "LeBron James: TS% Over Time") # Title
+
+# Add grid lines for better readability (optional)
+grid()
+# Calculate the league average ts_pct for each season
+league_avg <- aggregate(ts_pct ~ season_continuous, data = filtered_data, mean)
+
+# Plot league average ts_pct over season_continuous
+plot(league_avg$season_continuous, league_avg$ts_pct,
+     type = "o", # Line plot with points
+     col = "red", # Line color
+     pch = 16, # Point style
+     lwd = 2, # Line width
+     xlab = "Season (Continuous)", # X-axis label
+     ylab = "League Average TS%", # Y-axis label
+     main = "League Average TS% Over Time") # Title
+
+# Add grid lines for better readability (optional)
+grid()
+
+
+leModel <- lm(ts_pct ~ career_stage, data = leData)
+
+# View the model summary
+summary(leModel)
+```
+

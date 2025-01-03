@@ -1,0 +1,10 @@
+The tactical landscape of the NBA has evolved in the past two decades as teams have strategically emphasized the three point shot, resulting in more efficient offensive output overall.[1] 
+In this analysis, we aim to investigate how the average shooting efficiency varies over time across NBA players drafted in different rounds. Specifically, does the discrepancy between rounds change over the course of the dataset. 
+The dataset includes player performance metrics such as shooting efficiency, usage percentage, points scored per game, alongside demographic as well as biometrics like weight and height from the 1996-97 season to the 2022-23 season.
+The primary longitudinal outcome in this analysis will be True Shooting Percentage (TS%), a metric of shooting efficiency that accounts for two-point and three-point field goals as well as free throws [2]. By comparing the TS% trends for the two draft categories*, we aim to identify patterns in shooting efficiency trends between the 1996-97 season and 2022-23 seasons.
+
+https://pmc.ncbi.nlm.nih.gov/articles/PMC9915101/
+https://www.nba.com/thunder/news/stats101.html
+
+* undrafted players included in Round 2 in this analysis
+
